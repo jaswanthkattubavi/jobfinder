@@ -1,3 +1,4 @@
+import { requiresUkCitizenship, classifyClearance, classifySponsorship } from "./screening.ts";
 import type { NormalizedJob } from "./normalize";
 
 /**
@@ -27,12 +28,6 @@ export interface EligibilityResult {
 
 const ABOVE_LEVEL =
   /\b(senior|snr|sr\.?|staff|principal|distinguished|fellow|lead|leader|director|head of|manager|vp|vice president|chief|c-level|architect ii*i)\b/i;
-const CITIZENSHIP =
-  /\b(must be a (uk|british) citizen|uk citizenship (is )?required|british citizen(ship)? (is )?required|sole uk national)\b/i;
-const CLEARANCE =
-  /\b(security clearance|sc clearance|dv clearance|developed vetting|bpss|nppv|must be security cleared)\b/i;
-const NO_SPONSORSHIP =
-  /\b(we (are|'re) unable to (offer|provide) (visa )?sponsorship|no visa sponsorship|cannot sponsor|do not sponsor|sponsorship is not available|unable to sponsor)\b/i;
 
 export function assessEligibility(job: NormalizedJob, prefs: EligibilityPrefs): EligibilityResult {
   const reasons: string[] = [];
@@ -60,15 +55,24 @@ export function assessEligibility(job: NormalizedJob, prefs: EligibilityPrefs): 
     }
   }
 
-  if (prefs.rejectCitizenshipRequired && CITIZENSHIP.test(text)) {
+  if (prefs.rejectCitizenshipRequired && requiresUkCitizenship(text)) {
     ineligible = true;
     reasons.push("Posting requires UK citizenship");
   }
-  if (prefs.rejectSecurityClearance && CLEARANCE.test(text)) {
+  const clearance = classifyClearance(job.description);
+  if (prefs.rejectSecurityClearance && clearance.status === "required") {
     ineligible = true;
     reasons.push("Posting requires security clearance");
   }
-  if (NO_SPONSORSHIP.test(text)) {
+  if (
+    prefs.rejectSecurityClearance &&
+    clearance.evidence.length &&
+    ["unknown", "desirable"].includes(clearance.status)
+  ) {
+    needsReview = true;
+    reasons.push("Clearance is mentioned without a confirmed requirement — review the advert");
+  }
+  if (classifySponsorship(job.description) === "unavailable") {
     reasons.push("Posting states sponsorship is not available");
     needsReview = true;
   }
@@ -111,7 +115,9 @@ export function assessEligibility(job: NormalizedJob, prefs: EligibilityPrefs): 
     const ageDays = (Date.now() - new Date(job.postedAt).getTime()) / 86_400_000;
     if (prefs.maxJobAgeDays > 0 && ageDays > prefs.maxJobAgeDays) {
       needsReview = true;
-      reasons.push(`Posted ${Math.round(ageDays)} days ago, older than your ${prefs.maxJobAgeDays}-day window`);
+      reasons.push(
+        `Posted ${Math.round(ageDays)} days ago, older than your ${prefs.maxJobAgeDays}-day window`,
+      );
     }
   } else {
     reasons.push("Posting date not published by the source — stored as unknown");
@@ -130,5 +136,8 @@ export function assessEligibility(job: NormalizedJob, prefs: EligibilityPrefs): 
       reasons: [...reasons, `${job.city} is outside your preferred locations`],
     };
   }
-  return { status: "eligible", reasons: reasons.length > 0 ? reasons : ["Meets your basic criteria"] };
+  return {
+    status: "eligible",
+    reasons: reasons.length > 0 ? reasons : ["Meets your basic criteria"],
+  };
 }

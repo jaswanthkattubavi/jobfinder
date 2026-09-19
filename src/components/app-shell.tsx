@@ -2,6 +2,7 @@ import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   BarChart3,
+  Bot,
   Bookmark,
   Building2,
   ClipboardList,
@@ -23,6 +24,7 @@ import { supabase } from "@/integrations/supabase/client";
 const nav = [
   { to: "/today", label: "Today", icon: Sunrise },
   { to: "/feed", label: "Job Feed", icon: Radar },
+  { to: "/agent", label: "Agent", icon: Bot },
   { to: "/saved", label: "Saved", icon: Bookmark },
   { to: "/applications", label: "Applications", icon: ClipboardList },
   { to: "/companies", label: "Companies", icon: Building2 },
@@ -101,11 +103,11 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="surface radar-glow mt-4 p-3 text-xs">
-          <p className="font-medium">Scans run every morning</p>
+          <p className="font-medium">Job discovery</p>
           <p className="mt-1 text-muted-foreground">
             Last scan: {latest ? `${formatDate(latest.date)}, ${latest.finishedAt}` : "not run yet"}
           </p>
-          <p className="text-muted-foreground">Next automatic scan: 06:00 UK time</p>
+          <p className="text-muted-foreground">Manage scheduled discovery in Settings</p>
           <Button
             size="sm"
             variant="secondary"

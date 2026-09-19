@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "Jobfinder Application Copilot",
+  "version": "1.0.0",
+  "description": "Fill reviewed application answers on the current job page. Never submits applications.",
+  "permissions": ["activeTab", "scripting"],
+  "action": { "default_popup": "popup.html", "default_title": "Jobfinder Copilot" }
+}

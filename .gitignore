@@ -36,3 +36,8 @@ dist-ssr
 .env.*
 !.env.example
 .lovable/
+
+# Personal application exports
+application-*.json
+questions-*.json
+cv-*.txt

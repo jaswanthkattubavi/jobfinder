@@ -1,3 +1,9 @@
+import {
+  requiresUkCitizenship,
+  classifyClearance,
+  classifySponsorship,
+  containsSkill,
+} from "./screening.ts";
 /**
  * Pure scoring / analysis engine. No Supabase, no UI, no I/O.
  *
@@ -8,19 +14,10 @@
  */
 
 export type DbSponsorshipStatus =
-  | "confirmed"
-  | "likely"
-  | "possible"
-  | "unclear"
-  | "unlikely"
-  | "no_sponsorship";
+  "confirmed" | "likely" | "possible" | "unclear" | "unlikely" | "no_sponsorship";
 
 export type RecommendationTier =
-  | "apply_asap"
-  | "strong_match"
-  | "review"
-  | "low_priority"
-  | "hidden";
+  "apply_asap" | "strong_match" | "review" | "low_priority" | "hidden";
 
 export interface EngineCandidate {
   skills: string[];
@@ -122,11 +119,13 @@ export function normalizeCompanyName(name: string): string {
 function skillHit(candidateSkills: string[], skill: string): "full" | "partial" | "none" {
   const target = norm(skill);
   if (!target) return "none";
+  if (candidateSkills.some((own) => norm(own) === target)) return "full";
   for (const raw of candidateSkills) {
     const own = norm(raw);
     if (!own) continue;
     if (own === target) return "full";
-    if (own.length >= 3 && (own.includes(target) || target.includes(own))) return "partial";
+    if (own.length >= 3 && (containsSkill(own, target) || containsSkill(target, own)))
+      return "partial";
   }
   return "none";
 }
@@ -270,14 +269,17 @@ function degreeLevel(text: string | null | undefined): number | null {
 }
 
 function seniorityComponent(candidate: EngineCandidate, job: EngineJob) {
-  const allowed = candidate.allowedSeniority.map((s) => levelIndexOf(s)).filter((n): n is number => n !== null);
+  const allowed = candidate.allowedSeniority
+    .map((s) => levelIndexOf(s))
+    .filter((n): n is number => n !== null);
   const jobLevel = levelIndexOf(job.statedSeniority ?? job.seniority) ?? levelIndexOf(job.title);
   if (jobLevel === null || allowed.length === 0) {
     return { score: 65, note: "Advert does not state a clear level" };
   }
   const highest = Math.max(...allowed);
   const lowest = Math.min(...allowed);
-  if (jobLevel >= lowest && jobLevel <= highest) return { score: 100, note: "Level matches what you target" };
+  if (jobLevel >= lowest && jobLevel <= highest)
+    return { score: 100, note: "Level matches what you target" };
   const distance = jobLevel > highest ? jobLevel - highest : lowest - jobLevel;
   if (jobLevel > highest) {
     // Too senior is penalised much harder than too junior.
@@ -302,7 +304,10 @@ export function calculateMatchScore(candidate: EngineCandidate, job: EngineJob):
   const required = scoreSkillSet(candidate.skills, job.requiredSkills);
   const preferred = scoreSkillSet(candidate.skills, job.preferredSkills);
 
-  const experience = experienceComponent(candidate.yearsExperience, requiredYears(job.requiredExperienceYears));
+  const experience = experienceComponent(
+    candidate.yearsExperience,
+    requiredYears(job.requiredExperienceYears),
+  );
   const seniority = seniorityComponent(candidate, job);
 
   // Responsibilities and advert keywords are weak, text-matching signals: an
@@ -314,7 +319,7 @@ export function calculateMatchScore(candidate: EngineCandidate, job: EngineJob):
     ? clamp(
         40 +
           (responsibilities.filter((r) =>
-            candidate.skills.some((s) => norm(s).length > 2 && norm(r).includes(norm(s))),
+            candidate.skills.some((s) => norm(s).length > 2 && containsSkill(r, s)),
           ).length /
             responsibilities.length) *
             60,
@@ -325,10 +330,11 @@ export function calculateMatchScore(candidate: EngineCandidate, job: EngineJob):
   const keywordScore = atsCritical.length
     ? clamp(
         40 +
-          (atsCritical.filter((k) => skillHit(candidate.skills, k) !== "none").length / atsCritical.length) * 60,
+          (atsCritical.filter((k) => skillHit(candidate.skills, k) !== "none").length /
+            atsCritical.length) *
+            60,
       )
     : 65;
-
 
   const jobDegree = degreeLevel(job.educationRequirement);
   const ownDegree = degreeLevel(candidate.education);
@@ -344,15 +350,28 @@ export function calculateMatchScore(candidate: EngineCandidate, job: EngineJob):
             : 35;
 
   const titleHit = candidate.targetTitles.some(
-    (t) => norm(t).length > 3 && (norm(job.title).includes(norm(t)) || norm(t).includes(norm(job.title))),
+    (t) =>
+      norm(t).length > 3 &&
+      (norm(job.title).includes(norm(t)) || norm(t).includes(norm(job.title))),
   );
   const categoryHit = job.roleCategory
     ? (candidate.targetCategories ?? []).includes(job.roleCategory)
     : false;
   const industryHit = job.industry
-    ? candidate.preferredIndustries.some((i) => norm(i).length > 2 && norm(job.industry!).includes(norm(i)))
+    ? candidate.preferredIndustries.some(
+        (i) => norm(i).length > 2 && norm(job.industry!).includes(norm(i)),
+      )
     : false;
-  const domainScore = categoryHit && (titleHit || industryHit) ? 100 : categoryHit ? 85 : titleHit ? 75 : industryHit ? 65 : 45;
+  const domainScore =
+    categoryHit && (titleHit || industryHit)
+      ? 100
+      : categoryHit
+        ? 85
+        : titleHit
+          ? 75
+          : industryHit
+            ? 65
+            : 45;
 
   let cvMatchScore = clamp(
     required.score * 0.3 +
@@ -372,16 +391,23 @@ export function calculateMatchScore(candidate: EngineCandidate, job: EngineJob):
   if (seniority.score <= 25) cvMatchScore = Math.min(cvMatchScore, 60);
 
   const strengths: string[] = [];
-  if (required.matched.length) strengths.push(`Covers the essential ${required.matched.slice(0, 3).join(", ")}`);
-  if (preferred.matched.length) strengths.push(`Also has the nice-to-have ${preferred.matched.slice(0, 2).join(", ")}`);
+  if (required.matched.length)
+    strengths.push(`Covers the essential ${required.matched.slice(0, 3).join(", ")}`);
+  if (preferred.matched.length)
+    strengths.push(`Also has the nice-to-have ${preferred.matched.slice(0, 2).join(", ")}`);
   if (seniority.score === 100) strengths.push(seniority.note);
   if (experience.score >= 90) strengths.push(experience.note);
   if (responsibilitiesScore >= 70 && responsibilities.length)
-    strengths.push("Day-to-day duties line up with work you have done");
-  if (strengths.length === 0) strengths.push("Role family is inside the areas you follow");
+    strengths.push(
+      "Advert duties mention skills listed in your profile; work-history evidence still needs review",
+    );
+  if (strengths.length === 0) strengths.push("No strong evidence-backed strengths identified yet");
 
   const risks: string[] = [];
-  if (required.missing.length) risks.push(`No evidence of ${required.missing.slice(0, 3).join(", ")}`);
+  if (required.partial.length)
+    risks.push(`Only partial skill evidence for ${required.partial.slice(0, 3).join(", ")}`);
+  if (required.missing.length)
+    risks.push(`No evidence of ${required.missing.slice(0, 3).join(", ")}`);
   if (seniority.score < 100) risks.push(seniority.note);
   if (experience.score < 80) risks.push(experience.note);
   if ((job.leadershipExpectations ?? []).length)
@@ -389,17 +415,30 @@ export function calculateMatchScore(candidate: EngineCandidate, job: EngineJob):
   if (!job.analysed) risks.push("Full description analysis has not run for this role yet");
 
   const whyRecommended: string[] = [];
-  if (required.score >= 70) whyRecommended.push(`${required.score}% of the essential requirements are covered`);
+  if (required.score >= 70)
+    whyRecommended.push(
+      `Essential skill similarity score: ${required.score}/100 (includes partial matches)`,
+    );
   if (seniority.score === 100) whyRecommended.push("The level is one you target");
-  if (categoryHit && job.roleCategory) whyRecommended.push(`${job.roleCategory} is one of your chosen role families`);
-  if (job.sponsorshipStatus === "confirmed") whyRecommended.push("The advert itself mentions visa sponsorship");
+  if (categoryHit && job.roleCategory)
+    whyRecommended.push(`${job.roleCategory} is one of your chosen role families`);
+  if (job.sponsorshipStatus === "confirmed")
+    whyRecommended.push("The advert itself mentions visa sponsorship");
   if (experience.score >= 90) whyRecommended.push("Your experience meets what the advert asks for");
 
-  const gapsSummary = required.missing.length
-    ? `Essential requirements with no evidence in your profile: ${required.missing.slice(0, 5).join(", ")}.`
+  const gapNotes = [
+    required.missing.length
+      ? `Essential skills with no profile evidence: ${required.missing.slice(0, 5).join(", ")}.`
+      : "",
+    required.partial.length
+      ? `Partial skill matches needing verification: ${required.partial.slice(0, 5).join(", ")}.`
+      : "",
+  ].filter(Boolean);
+  const gapsSummary = gapNotes.length
+    ? gapNotes.join(" ")
     : required.known
-      ? "Every essential requirement in the advert is evidenced in your profile."
-      : "The advert does not list its essential skills explicitly, so skill fit is estimated from the description.";
+      ? "All extracted essential skills match profile skill labels; depth and other requirements still need verification."
+      : "The advert does not list its essential skills explicitly; skill fit is unknown.";
 
   return {
     cvMatchScore,
@@ -509,13 +548,14 @@ export function calculateOpportunityScore(
         ? 100
         : clamp((job.salaryMax / Math.max(1, candidate.minimumSalary)) * 70);
 
-  const workStyleFit = candidate.remotePreferences.length === 0
-    ? 70
-    : candidate.remotePreferences.some((p) => norm(p) === norm(job.remoteType))
-      ? 100
-      : job.remoteType === "Remote"
-        ? 85
-        : 50;
+  const workStyleFit =
+    candidate.remotePreferences.length === 0
+      ? 70
+      : candidate.remotePreferences.some((p) => norm(p) === norm(job.remoteType))
+        ? 100
+        : job.remoteType === "Remote"
+          ? 85
+          : 50;
 
   const sponsorshipFit = sponsorshipFitScore[job.sponsorshipStatus];
   const priorityScore = companyPriorityScore[companyPriority];
@@ -534,13 +574,17 @@ export function calculateOpportunityScore(
       linkVerification * weights.linkVerification) /
     total;
 
-  const bounded = Math.max(-MAX_LEARNED_ADJUSTMENT, Math.min(MAX_LEARNED_ADJUSTMENT, Math.round(learnedAdjustment)));
+  const bounded = Math.max(
+    -MAX_LEARNED_ADJUSTMENT,
+    Math.min(MAX_LEARNED_ADJUSTMENT, Math.round(learnedAdjustment)),
+  );
   weighted += bounded;
 
   const reasons = [...match.whyRecommended];
   if (linkVerification === 100) reasons.push("The application link was checked and is live");
   if (priorityScore >= 100) reasons.push("Employer is on your high-priority watchlist");
-  if (recency >= 85 && daysOld !== null) reasons.push(`Posted ${daysOld} day${daysOld === 1 ? "" : "s"} ago`);
+  if (recency >= 85 && daysOld !== null)
+    reasons.push(`Posted ${daysOld} day${daysOld === 1 ? "" : "s"} ago`);
   if (bounded > 0) reasons.push("Similar roles you saved before nudged this up slightly");
 
   // Hard overrides stated by the posting outweigh every preference boost.
@@ -582,7 +626,6 @@ export function calculateOpportunityScore(
       );
     }
   }
-
 
   return {
     opportunityScore,
@@ -629,14 +672,15 @@ export function analyseSponsorshipRules(input: {
   const evidence: string[] = [];
   const warnings: string[] = [];
 
-  const saysNo = /no visa sponsorship|cannot sponsor|not able to sponsor|no sponsorship/.test(text);
-  const saysYes = /sponsorship is available|we can sponsor|visa sponsorship offered|skilled worker visa/.test(text);
-  const citizenship = /uk citizenship|british citizen/.test(text);
-  const clearance = /security clearance|sc cleared|dv cleared/.test(text);
+  const sponsorship = classifySponsorship(input.description);
+  const saysNo = sponsorship === "unavailable";
+  const saysYes = sponsorship === "offered";
+  const citizenship = requiresUkCitizenship(input.description);
+  const clearance = classifyClearance(input.description).status === "required";
 
   if (saysNo) {
     evidence.push("Advert states sponsorship is not available");
-    return { status: "no_sponsorship", confidence: 3, evidence, warnings };
+    return { status: "no_sponsorship", confidence: 100, evidence, warnings };
   }
   if (citizenship) {
     evidence.push("Advert requires UK citizenship");
@@ -644,10 +688,13 @@ export function analyseSponsorshipRules(input: {
     return { status: "no_sponsorship", confidence: 5, evidence, warnings };
   }
   if (clearance) {
-    warnings.push("Security clearance is required, which usually needs long UK residency");
+    warnings.push(
+      "Advert requires security clearance or clearance eligibility; excluded by your clearance preference",
+    );
   }
 
-  let status: DbSponsorshipStatus = input.companySponsorStatus;
+  let status: DbSponsorshipStatus =
+    input.companySponsorStatus === "confirmed" ? "possible" : input.companySponsorStatus;
   let confidence = input.companyConfidence;
 
   if (saysYes) {
@@ -659,12 +706,9 @@ export function analyseSponsorshipRules(input: {
     evidence.push(`Employer sponsorship signal: ${input.companySponsorStatus}`);
   }
 
-  if (input.salaryMax !== null && input.salaryMax >= 38700) {
-    evidence.push("Salary is compatible with Skilled Worker salary thresholds");
-  } else if (input.salaryMax !== null) {
-    warnings.push("Salary may fall below the general Skilled Worker threshold");
-    confidence = Math.max(0, confidence - 10);
-  }
+  warnings.push(
+    "Verify current visa salary rules, occupation code and employer eligibility; advertised salary alone does not establish visa eligibility.",
+  );
 
   warnings.push("Sponsorship is an estimate — always confirm with the employer");
 

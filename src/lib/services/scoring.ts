@@ -1,3 +1,4 @@
+import { requiresUkCitizenship, classifyClearance } from "./screening.ts";
 import type {
   CandidateProfile,
   Job,
@@ -19,7 +20,6 @@ export function classifyOpportunity(score: number): Priority {
   if (score >= 50) return "Low Priority";
   return "Hidden";
 }
-
 
 const sponsorshipWeight: Record<Job["sponsorship"]["status"], number> = {
   Confirmed: 100,
@@ -60,7 +60,9 @@ export function calculateOpportunityScore({
   );
 
   const locationFit = profile.preferredLocations.some(
-    (l) => job.city.toLowerCase().includes(l.toLowerCase().replace(" uk", "")) || job.remote === "Remote",
+    (l) =>
+      job.city.toLowerCase().includes(l.toLowerCase().replace(" uk", "")) ||
+      job.remote === "Remote",
   )
     ? 100
     : 55;
@@ -68,13 +70,10 @@ export function calculateOpportunityScore({
   const seniorityFit = profile.preferredSeniority.includes(job.seniority) ? 100 : 45;
   const recency = Math.max(0, 100 - daysOld * 10);
   const salaryFit =
-    job.salaryMax === undefined
-      ? 60
-      : job.salaryMax >= profile.salaryExpectation.min
-        ? 100
-        : 50;
+    job.salaryMax === undefined ? 60 : job.salaryMax >= profile.salaryExpectation.min ? 100 : 50;
   const priorityFit = companyPriority === "High" ? 100 : companyPriority === "Medium" ? 75 : 55;
-  const linkFactor = job.linkStatus === "Live" ? 1 : job.linkStatus === "Possibly Live" ? 0.97 : 0.9;
+  const linkFactor =
+    job.linkStatus === "Live" ? 1 : job.linkStatus === "Possibly Live" ? 0.97 : 0.9;
 
   const total =
     (job.match.overall * weights.cvMatch +
@@ -100,9 +99,9 @@ export function filterJob(job: Job, prefs: SearchPreferences): FilterResult {
   const text = `${job.title} ${job.description} ${job.requiredSkills.join(" ")}`.toLowerCase();
 
   if (job.country !== "United Kingdom") reasons.push("Outside the United Kingdom");
-  if (prefs.rejectCitizenshipRequired && text.includes("uk citizenship"))
+  if (prefs.rejectCitizenshipRequired && requiresUkCitizenship(text))
     reasons.push("Requires UK citizenship");
-  if (prefs.rejectSecurityClearance && text.includes("security clearance"))
+  if (prefs.rejectSecurityClearance && classifyClearance(text).status === "required")
     reasons.push("Requires security clearance");
   if (prefs.excludedTitles.some((t) => job.title.toLowerCase().includes(t.toLowerCase())))
     reasons.push("Title excluded in your settings");

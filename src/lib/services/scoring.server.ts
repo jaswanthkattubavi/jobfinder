@@ -1,3 +1,4 @@
+import { requiresUkCitizenship, classifyClearance } from "./screening.ts";
 /**
  * Server-side match + opportunity scoring against stored jobs.
  *
@@ -18,7 +19,12 @@ import {
   type EngineJob,
   type EngineWeights,
 } from "./engine";
-import { adjustmentFor, aggregateSignals, type LearnedSignal, type LearningSignalKind } from "./learning";
+import {
+  adjustmentFor,
+  aggregateSignals,
+  type LearnedSignal,
+  type LearningSignalKind,
+} from "./learning";
 
 type Db = SupabaseClient<any, "public", any>;
 
@@ -31,14 +37,17 @@ export interface ScoreOutcome {
   analysedCovered: number;
 }
 
-const CITIZENSHIP = /\b(must be a (uk|british) citizen|uk citizenship (is )?required|sole uk national)\b/i;
-const CLEARANCE = /\b(security clearance|sc clearance|dv clearance|developed vetting)\b/i;
-const LICENCE = /\b(must (hold|have) a (valid )?(professional )?licence|chartered status required)\b/i;
+const LICENCE =
+  /\b(must (hold|have) a (valid )?(professional )?licence|chartered status required)\b/i;
 
-function mandatoryBlockers(description: string, requiredYears: string | null, candidateYears: number): string[] {
+function mandatoryBlockers(
+  description: string,
+  requiredYears: string | null,
+  candidateYears: number,
+): string[] {
   const out: string[] = [];
-  if (CITIZENSHIP.test(description)) out.push("UK citizenship required");
-  if (CLEARANCE.test(description)) out.push("Security clearance required");
+  if (requiresUkCitizenship(description)) out.push("UK citizenship required");
+  if (classifyClearance(description).status === "required") out.push("Security clearance required");
   if (LICENCE.test(description)) out.push("Professional licence required");
   const years = requiredYears ? Number(/\d+/.exec(requiredYears)?.[0] ?? 0) : 0;
   if (years > 0 && years - candidateYears >= 4) out.push(`Asks for ${years}+ years of experience`);
@@ -122,8 +131,16 @@ export async function scoreUserMatches(db: Db, userId: string): Promise<ScoreOut
     db.from("candidate_profiles").select("*").eq("user_id", userId).maybeSingle(),
     db.from("candidate_skills").select("skill_name").eq("user_id", userId),
     db.from("search_preferences").select("*").eq("user_id", userId).maybeSingle(),
-    db.from("role_preferences").select("role_category, target_titles, enabled").eq("user_id", userId),
-    db.from("jobs").select("*").eq("is_active", true).order("discovered_at", { ascending: false }).limit(1500),
+    db
+      .from("role_preferences")
+      .select("role_category, target_titles, enabled")
+      .eq("user_id", userId),
+    db
+      .from("jobs")
+      .select("*")
+      .eq("is_active", true)
+      .order("discovered_at", { ascending: false })
+      .limit(1500),
     db.from("job_skills").select("job_id, skill_name, requirement_type"),
     db.from("job_sponsorship_analysis").select("job_id, status, confidence"),
     db.from("company_watchlist").select("company_id, priority").eq("user_id", userId),
@@ -150,7 +167,11 @@ export async function scoreUserMatches(db: Db, userId: string): Promise<ScoreOut
   const jobSkills = (jobSkillsRes.data ?? []) as Array<Record<string, unknown>>;
   const sponsorship = (sponsorshipRes.data ?? []) as Array<Record<string, unknown>>;
   const watch = (watchRes.data ?? []) as Array<Record<string, unknown>>;
-  const roles = (rolesRes.data ?? []) as Array<{ role_category: string; target_titles: string[]; enabled: boolean }>;
+  const roles = (rolesRes.data ?? []) as Array<{
+    role_category: string;
+    target_titles: string[];
+    enabled: boolean;
+  }>;
   const analyses = (analysisRes.data ?? []) as Array<Record<string, unknown>>;
   const companyNames = new Map(
     ((companiesRes.data ?? []) as Array<{ id: string; name: string }>).map((c) => [c.id, c.name]),
@@ -171,14 +192,15 @@ export async function scoreUserMatches(db: Db, userId: string): Promise<ScoreOut
     preferredLocations: (prefs["preferred_locations"] as string[]) ?? [],
     preferredIndustries: (prefs["preferred_industries"] as string[]) ?? [],
     targetTitles: [
-      ...(((prefs["target_titles"] as string[]) ?? [])),
+      ...((prefs["target_titles"] as string[]) ?? []),
       ...roles.filter((r) => r.enabled).flatMap((r) => r.target_titles ?? []),
     ],
     minimumSalary: Number(prefs["minimum_salary"] ?? 0),
     remotePreferences: (prefs["remote_preferences"] as string[]) ?? [],
     targetCategories: roles.filter((r) => r.enabled).map((r) => r.role_category),
     requiresSponsorship:
-      profile["sponsorship_required_now"] === true || profile["sponsorship_required_later"] === true,
+      profile["sponsorship_required_now"] === true ||
+      profile["sponsorship_required_later"] === true,
   };
 
   const weights: EngineWeights = {
@@ -200,23 +222,36 @@ export async function scoreUserMatches(db: Db, userId: string): Promise<ScoreOut
     watch.map((w) => [w["company_id"] as string, (w["priority"] as string) ?? "normal"]),
   );
   const skillsFor = (jobId: string, kind: string) =>
-    jobSkills.filter((s) => s["job_id"] === jobId && s["requirement_type"] === kind).map((s) => s["skill_name"] as string);
+    jobSkills
+      .filter((s) => s["job_id"] === jobId && s["requirement_type"] === kind)
+      .map((s) => s["skill_name"] as string);
 
   const rows: Array<Record<string, unknown>> = [];
-  const applyAsapJobs: Array<{ id: string; title: string; score: number; isDemo: boolean; company: string }> = [];
+  const applyAsapJobs: Array<{
+    id: string;
+    title: string;
+    score: number;
+    isDemo: boolean;
+    company: string;
+  }> = [];
   let strongMatches = 0;
   let realScored = 0;
   let analysedCovered = 0;
 
   for (const job of jobs) {
     const id = job["id"] as string;
-    const spons = sponsorshipByJob.get(id) ?? { status: "unclear" as DbSponsorshipStatus, confidence: 0 };
+    const spons = sponsorshipByJob.get(id) ?? {
+      status: "unclear" as DbSponsorshipStatus,
+      confidence: 0,
+    };
     const description = (job["description"] as string) ?? "";
     const analysis = analysisByJob.get(id);
     const analysed = Boolean(analysis) && analysis?.["analysis_status"] === "completed";
     if (analysed) analysedCovered += 1;
     const requiredYears =
-      (analysis?.["years_experience_text"] as string) ?? (job["required_experience_years"] as string) ?? null;
+      (analysis?.["years_experience_text"] as string) ??
+      (job["required_experience_years"] as string) ??
+      null;
 
     const engineJob: EngineJob = {
       id,
@@ -239,8 +274,8 @@ export async function scoreUserMatches(db: Db, userId: string): Promise<ScoreOut
       sponsorshipConfidence: spons.confidence,
       eligibilityStatus: (job["eligibility_status"] as EngineJob["eligibilityStatus"]) ?? "review",
       mandatoryBlockers: mandatoryBlockers(description, requiredYears, candidateYears),
-      citizenshipRequired: CITIZENSHIP.test(description),
-      securityRestriction: CLEARANCE.test(description),
+      citizenshipRequired: requiresUkCitizenship(description),
+      securityRestriction: classifyClearance(description).status === "required",
       responsibilities: asStrings(analysis?.["responsibilities_json"]).length
         ? asStrings(analysis?.["responsibilities_json"])
         : ((job["responsibilities"] as string[]) ?? []),
@@ -249,7 +284,8 @@ export async function scoreUserMatches(db: Db, userId: string): Promise<ScoreOut
       leadershipExpectations: asStrings(analysis?.["leadership_json"]),
       educationRequirement:
         asStrings(analysis?.["education_requirements_json"])[0] ??
-        ((job["education_requirement"] as string) ?? null),
+        (job["education_requirement"] as string) ??
+        null,
       statedSeniority: (analysis?.["stated_seniority"] as string) ?? null,
       analysed,
     };
@@ -279,7 +315,8 @@ export async function scoreUserMatches(db: Db, userId: string): Promise<ScoreOut
 
     const isDemo = job["is_demo"] === true;
     if (!isDemo) realScored += 1;
-    if (opportunity.tier === "strong_match" || opportunity.tier === "apply_asap") strongMatches += 1;
+    if (opportunity.tier === "strong_match" || opportunity.tier === "apply_asap")
+      strongMatches += 1;
     if (opportunity.tier === "apply_asap")
       applyAsapJobs.push({
         id,
@@ -340,7 +377,9 @@ export async function scoreUserMatches(db: Db, userId: string): Promise<ScoreOut
       .select("job_id")
       .eq("user_id", userId)
       .eq("type", "apply_asap");
-    const already = new Set(((existing ?? []) as Array<{ job_id: string | null }>).map((n) => n.job_id));
+    const already = new Set(
+      ((existing ?? []) as Array<{ job_id: string | null }>).map((n) => n.job_id),
+    );
     const fresh = realApplyAsap.filter((j) => !already.has(j.id)).slice(0, 8);
     if (fresh.length > 0) {
       await db.from("notifications").insert(

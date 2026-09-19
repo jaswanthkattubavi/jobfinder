@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Jobfinder Copilot</title><link rel="stylesheet" href="popup.css"></head>
+<body><h1>Application copilot</h1>
+<p>Import your reviewed Jobfinder packet on its application page. This tool never submits.</p>
+<label for="packet">Application packet (.json)</label><input id="packet" type="file" accept=".json,application/json">
+<p id="job"></p><p id="status" role="status">No packet loaded. Data stays in this popup and clears when it closes.</p>
+<div class="actions"><button id="scan" disabled>Scan questions</button><button id="fill" disabled>Fill saved answers</button><button id="export" disabled>Download unanswered</button><button id="cv" disabled>Download CV text</button><button id="clear">Clear</button></div>
+<ul id="results"></ul>
+<p class="note">Review every filled answer. Upload your formatted CV yourself; plain CV text is a reference only. Login, OTP, CAPTCHA, declarations, sensitive answers and submission remain manual. Embedded forms and custom controls may be unsupported.</p>
+<script type="module" src="popup.mjs"></script></body></html>

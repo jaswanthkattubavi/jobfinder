@@ -1,3 +1,4 @@
+import { requiresUkCitizenship, classifyClearance, classifySponsorship } from "./screening.ts";
 /**
  * UK sponsorship intelligence — evidence-weighted, never guessed.
  *
@@ -13,12 +14,7 @@
  */
 
 export type SponsorshipStatusDb =
-  | "confirmed"
-  | "likely"
-  | "possible"
-  | "unclear"
-  | "unlikely"
-  | "no_sponsorship";
+  "confirmed" | "likely" | "possible" | "unclear" | "unlikely" | "no_sponsorship";
 
 export type SponsorMatchStatus = "matched" | "possible" | "not_found" | "unknown";
 
@@ -85,9 +81,24 @@ export function normalizeLegalName(value: string): string {
 }
 
 const LEGAL_SUFFIXES = new Set([
-  "limited", "ltd", "llp", "lp", "plc", "inc", "incorporated", "corporation",
-  "corp", "company", "co", "holdings", "holding", "group", "uk", "gb",
-  "international", "the",
+  "limited",
+  "ltd",
+  "llp",
+  "lp",
+  "plc",
+  "inc",
+  "incorporated",
+  "corporation",
+  "corp",
+  "company",
+  "co",
+  "holdings",
+  "holding",
+  "group",
+  "uk",
+  "gb",
+  "international",
+  "the",
 ]);
 
 /** Strips legal-form words so "Monzo Bank Limited" → "monzo bank". */
@@ -132,7 +143,10 @@ interface Candidate {
 
 function pickEntry(list: Candidate[]): Candidate {
   // Prefer a Worker (Skilled Worker) licence when an organisation holds several.
-  const worker = list.find((c) => /skilled worker/i.test(c.entry.route ?? "") || /worker/i.test(c.entry.licence_type ?? ""));
+  const worker = list.find(
+    (c) =>
+      /skilled worker/i.test(c.entry.route ?? "") || /worker/i.test(c.entry.licence_type ?? ""),
+  );
   return worker ?? list[0]!;
 }
 
@@ -187,10 +201,19 @@ export function matchSponsorRegister(
     core: normalizeTradingName(entry.organisation_name),
   }));
 
-  const exact = candidates.filter((c) => c.entry.normalized_name === legal || normalizeLegalName(c.entry.organisation_name) === legal);
+  const exact = candidates.filter(
+    (c) =>
+      c.entry.normalized_name === legal || normalizeLegalName(c.entry.organisation_name) === legal,
+  );
   if (exact.length > 0) {
     const chosen = pickEntry(exact);
-    return matchResult("matched", chosen, 100, "exact", `Employer name matches the register entry exactly.`);
+    return matchResult(
+      "matched",
+      chosen,
+      100,
+      "exact",
+      `Employer name matches the register entry exactly.`,
+    );
   }
 
   const aliasTargets = SPONSOR_ALIASES[core] ?? [];
@@ -198,7 +221,13 @@ export function matchSponsorRegister(
     const aliased = candidates.filter((c) => aliasTargets.includes(c.core));
     if (aliased.length > 0) {
       const chosen = pickEntry(aliased);
-      return matchResult("matched", chosen, 95, "alias", "Matched through a verified trading-name alias.");
+      return matchResult(
+        "matched",
+        chosen,
+        95,
+        "alias",
+        "Matched through a verified trading-name alias.",
+      );
     }
   }
 
@@ -327,7 +356,10 @@ const JOB_PATTERNS: Pattern[] = [
 
 function snippetAround(text: string, index: number): string {
   const start = Math.max(0, index - 90);
-  return text.slice(start, Math.min(text.length, index + 160)).replace(/\s+/g, " ").trim();
+  return text
+    .slice(start, Math.min(text.length, index + 160))
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export interface JobWordingAnalysis {
@@ -344,9 +376,18 @@ export interface JobWordingAnalysis {
 export function analyseJobWording(description: string): JobWordingAnalysis {
   const text = description ?? "";
   const items: SponsorshipEvidenceItem[] = [];
+  const sponsorship = classifySponsorship(text);
+  const clearance = classifyClearance(text);
   for (const p of JOB_PATTERNS) {
+    if (
+      p.kind === "security_clearance" ||
+      (p.kind === "job_wording" && (p.weight >= 55 || p.weight <= -80))
+    )
+      continue;
+    if (p.kind === "job_wording" && sponsorship === "unavailable") continue;
     const m = p.re.exec(text);
     if (!m) continue;
+    if (p.kind === "citizenship_restriction" && !requiresUkCitizenship(text)) continue;
     items.push({
       kind: p.kind,
       source: "job",
@@ -356,12 +397,34 @@ export function analyseJobWording(description: string): JobWordingAnalysis {
       snippet: snippetAround(text, m.index),
     });
   }
+  if (sponsorship !== "unknown")
+    items.push({
+      kind: "job_wording",
+      source: "job",
+      tone: sponsorship === "offered" ? "positive" : "negative",
+      text:
+        sponsorship === "offered"
+          ? "Vacancy explicitly offers sponsorship"
+          : "Vacancy explicitly excludes sponsorship",
+      weight: sponsorship === "offered" ? 55 : -80,
+    });
+  if (clearance.status === "required")
+    items.push({
+      kind: "security_clearance",
+      source: "job",
+      tone: "negative",
+      text: "Vacancy requires security clearance or clearance eligibility",
+      weight: -40,
+      snippet: clearance.evidence.join("; "),
+    });
   const has = (kind: SponsorshipEvidenceKind, minWeight: number) =>
     items.some((i) => i.kind === kind && i.weight >= minWeight);
   return {
     items,
     hasExplicitPositive: has("job_wording", 55),
-    hasModeratePositive: items.some((i) => i.kind === "job_wording" && i.weight >= 26 && i.weight < 55),
+    hasModeratePositive: items.some(
+      (i) => i.kind === "job_wording" && i.weight >= 26 && i.weight < 55,
+    ),
     explicitNoSponsorship: items.some((i) => i.kind === "job_wording" && i.weight <= -80),
     requiresExistingRightToWork: items.some((i) => i.kind === "work_authorisation"),
     citizenshipRequired: items.some((i) => i.kind === "citizenship_restriction"),
@@ -413,7 +476,9 @@ export function analyseSponsorship(input: SponsorshipInput): SponsorshipResult {
       text: `Possible sponsor-register match ("${match.entity}") — not accepted automatically because the name match is uncertain`,
       weight: 0,
     });
-    warnings.push("The employer's sponsor-licence match needs review, so it is not counted as evidence.");
+    warnings.push(
+      "The employer's sponsor-licence match needs review, so it is not counted as evidence.",
+    );
   } else if (match.status === "not_found") {
     evidence.push({
       kind: "sponsor_register",
@@ -446,16 +511,9 @@ export function analyseSponsorship(input: SponsorshipInput): SponsorshipResult {
     });
     score += 8;
   }
-  if (input.salaryMin && input.salaryMin >= 38_700) {
-    evidence.push({
-      kind: "salary",
-      source: "job",
-      tone: "positive",
-      text: `Stated salary from £${input.salaryMin.toLocaleString()} is at or above the general Skilled Worker salary floor`,
-      weight: 8,
-    });
-    score += 8;
-  }
+  warnings.push(
+    "Verify current visa salary rules, occupation code and employer eligibility; salary alone does not establish visa eligibility.",
+  );
   if (wording.items.every((i) => i.kind !== "job_wording")) {
     evidence.push({
       kind: "no_wording",
@@ -523,7 +581,7 @@ export function analyseSponsorship(input: SponsorshipInput): SponsorshipResult {
       ? "British/UK citizenship required, plus security clearance or vetting."
       : "British/UK citizenship required."
     : wording.securityRestriction
-      ? "Security clearance or vetting required, which usually restricts nationality."
+      ? "Security clearance or clearance eligibility required; excluded by your clearance preference."
       : "No citizenship or security-clearance restriction detected.";
 
   const employerPart =
@@ -567,9 +625,18 @@ export function analyseSponsorship(input: SponsorshipInput): SponsorshipResult {
 }
 
 const SPONSORABLE_CATEGORIES = new Set([
-  "Data Science", "Machine Learning", "AI Engineering", "MLOps", "Data Engineering",
-  "Software Engineering", "Backend Engineering", "Cloud Engineering", "Solutions Engineering",
-  "Solutions Architecture", "Platform Engineering", "Data Analytics",
+  "Data Science",
+  "Machine Learning",
+  "AI Engineering",
+  "MLOps",
+  "Data Engineering",
+  "Software Engineering",
+  "Backend Engineering",
+  "Cloud Engineering",
+  "Solutions Engineering",
+  "Solutions Architecture",
+  "Platform Engineering",
+  "Data Analytics",
 ]);
 
 export function roleLooksSponsorable(category: string | null): boolean {
