@@ -13,6 +13,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { analyseStoredJobs } from "./analysis.server";
+import { aiAnalysisLimit } from "./analysis-budget";
 
 
 import { dedupeBatch, findDuplicate, type ExistingJob } from "./dedupe";
@@ -39,7 +40,7 @@ type Db = SupabaseClient<any, "public", any>;
 const MAX_SOURCES_PER_RUN = 400;
 const SOURCE_CONCURRENCY = 8;
 const MAX_VERIFICATIONS_PER_RUN = 30;
-const MAX_AI_ANALYSES_PER_RUN = 30;
+const MAX_AI_ANALYSES_PER_RUN = aiAnalysisLimit(process.env["JOBFINDER_MAX_AI_ANALYSES"]);
 
 /** Cheap UK hint used only for per-source counts, never for storing a job. */
 const UK_LOCATION_HINT =

@@ -51,3 +51,19 @@ Scheduled discovery currently processes at most 20 onboarded accounts per invoca
 ## Verification
 
 `npm test` covers screening, evidence-preserving CV preparation, answer expiry/context, URL restrictions, scheduler leases and the browser form adapter. It does not prove that every employer's dynamic form is supported. Production rollout still needs a staging database migration, authenticated end-to-end scan, actual CV parsing, email-provider check and supervised browser trial. Never report a successful application based only on filled fields or an HTTP success from unrelated endpoints.
+
+## Lower-cost daily runs with GitHub Actions
+
+The workflow in `.github/workflows/daily-jobs.yml` runs discovery and preparation **directly on a standard Ubuntu runner**. It does not need a hosted dashboard endpoint. It still needs your Supabase database, migrations, completed profile, employer source configuration and CV. You can run the dashboard locally with `npm run dev` if you do not want website hosting yet. GitHub Pages cannot run this app's server functions without an architectural change.
+
+Setup for this repository:
+
+- Open [repository secrets](https://github.com/jaswanthkattubavi/jobfinder/settings/secrets/actions) and add `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `JOBFINDER_USER_ID` (your candidate profile's `user_id`). Do not put these values in source, issues or chat.
+- Open [repository variables](https://github.com/jaswanthkattubavi/jobfinder/settings/variables/actions). Set `JOBFINDER_ACTIONS_ENABLED` to `true` only after setup. Leave `JOBFINDER_MAX_AI_ANALYSES` unset for **zero new paid AI calls**, or deliberately set a per-run limit from 1 to 30 and add the `LOVABLE_API_KEY` secret.
+- Enable preparation in the Agent workspace if you want it to follow discovery. New, unanalysed jobs may require review when AI is disabled; cached analysis is reused. A no-AI run is not equivalent to full AI matching.
+- Open [Actions](https://github.com/jaswanthkattubavi/jobfinder/actions) and run **Daily job discovery and preparation** manually once. Subsequent runs are scheduled at **06:17 UTC** (07:17 during British Summer Time). GitHub may delay scheduled runs and disables public-repository schedules after 60 days without repository activity.
+- Use this workflow **instead of** the previous database/hosting schedule. The shared lease prevents simultaneous overlap, but does not deduplicate two separate completed schedules on the same day.
+
+The workflow uploads no CV, answers, packets or artifacts and logs only aggregate counts. It sends no emails and submits no applications. It intentionally does not provision paid services or configure optional paid search providers. Standard GitHub-hosted runner compute is free for public repositories; private repositories have plan-dependent allowances. Database, model-provider and any optional API charges remain separate. External API budgets are not a monetary guarantee; use provider-side spending limits too.
+
+Offline verification: `npm run jobs:daily -- --check` resolves the worker's imports without contacting any service.

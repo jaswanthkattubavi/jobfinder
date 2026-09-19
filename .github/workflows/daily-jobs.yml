@@ -1,0 +1,38 @@
+name: Daily job discovery and preparation
+
+on:
+  schedule:
+    # Off the hour to reduce congestion. 06:17 UTC = 06:17 GMT / 07:17 BST.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jobfinder-daily
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    # Opt in only after the database, profile and secrets are configured.
+    if: ${{ vars.JOBFINDER_ACTIONS_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm ci --ignore-scripts
+      - name: Run daily discovery and prepare application packets
+        run: npm run jobs:daily
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          JOBFINDER_USER_ID: ${{ secrets.JOBFINDER_USER_ID }}
+          # No new paid model calls by default. Increase deliberately (maximum 30).
+          JOBFINDER_MAX_AI_ANALYSES: ${{ vars.JOBFINDER_MAX_AI_ANALYSES || '0' }}
+          LOVABLE_API_KEY: ${{ secrets.LOVABLE_API_KEY }}
